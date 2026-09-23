@@ -1,0 +1,20 @@
+# Operating-system generated files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE settings
+.idea/
+.vscode/
+
+# Temporary files and build output
+*.tmp
+*.log
+*.o
+*.obj
+*.out
+*.exe
+__pycache__/
+.pytest_cache/
+build/
+dist/
