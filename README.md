@@ -4,7 +4,7 @@
 
 - [实验报告](report/report.md)：全部练习答案、模块和 OS 原理分析。
 - [实验记录](report/record.md)：配置、故障、修复及复现步骤。
-- [提示词记录](report/prompt.md)：真实任务提示词与需求规格。
+- [提示词记录](report/prompt.md)：优化后的提示词。
 - `code/`：原始最小内核、Makefile 兼容修复和验证脚本。
 - `report/logs/`：实际构建、GDB 与串口日志。
 - `report/images/`：原始日志渲染页面的截图及 HTML。
