@@ -245,7 +245,7 @@ finish
 
 **测试截图：**
 
-以下为实测日志页面截图。当前压缩包未提供 `tools/grade.sh`，因此未执行 `make grade`，采用构建、QEMU 输出和 GDB 断言验证。
+以下为实测日志页面截图。原始代码未提供 `tools/grade.sh`，因此未执行 `make grade`，采用构建、QEMU 输出和 GDB 断言验证。
 
 ![复位与 OpenSBI 入口](./images/reset.png)
 
