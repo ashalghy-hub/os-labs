@@ -1,0 +1,22 @@
+Original archive SHA256: 50512CDE99E27FFD4C0319521CECA01495FE9A34D1080698105C73082B91444D
+UNCHANGED: lab1/kern/driver/console.c
+UNCHANGED: lab1/kern/driver/console.h
+UNCHANGED: lab1/kern/init/entry.S
+UNCHANGED: lab1/kern/init/init.c
+UNCHANGED: lab1/kern/libs/stdio.c
+UNCHANGED: lab1/kern/mm/memlayout.h
+UNCHANGED: lab1/kern/mm/mmu.h
+UNCHANGED: lab1/libs/defs.h
+UNCHANGED: lab1/libs/error.h
+UNCHANGED: lab1/libs/printfmt.c
+UNCHANGED: lab1/libs/readline.c
+UNCHANGED: lab1/libs/riscv.h
+UNCHANGED: lab1/libs/sbi.c
+UNCHANGED: lab1/libs/sbi.h
+UNCHANGED: lab1/libs/stdarg.h
+UNCHANGED: lab1/libs/stdio.h
+UNCHANGED: lab1/libs/string.c
+UNCHANGED: lab1/libs/string.h
+MODIFIED: lab1/Makefile
+UNCHANGED: lab1/tools/function.mk
+UNCHANGED: lab1/tools/kernel.ld

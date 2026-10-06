@@ -1,0 +1,5 @@
+Linux LAPTOP-FPD8G88P 6.18.33.2-microsoft-standard-WSL2 #1 SMP PREEMPT_DYNAMIC Thu Jun 18 21:54:43 UTC 2026 x86_64 GNU/Linux
+riscv64-unknown-elf-gcc (14.2.0+19) 14.2.0
+QEMU emulator version 10.2.1 (Debian 1:10.2.1+ds-1ubuntu3.2)
+GNU gdb (Ubuntu 17.1-2ubuntu1) 17.1
+GNU Make 4.4.1

@@ -1,0 +1,100 @@
+The target architecture is set to "riscv:rv64".
+0x0000000000001000 in ?? ()
+
+=== RESET: PC and instructions ===
+pc             0x1000	0x1000
+a0             0x0	0
+a1             0x0	0
+a2             0x0	0
+sp             0x0	0x0
+=> 0x1000:	auipc	t0,0x0
+   0x1004:	addi	a2,t0,40
+   0x1008:	csrr	a0,mhartid
+   0x100c:	ld	a1,32(t0)
+   0x1010:	ld	t0,24(t0)
+   0x1014:	jr	t0
+   0x1018:	unimp
+   0x101a:	.insn	2, 0x8000
+0x1018:	0x0000000080000000	0x0000000087e00000
+0x1028:	0x000000004942534f	0x0000000000000002
+
+=== Kernel already loaded before first CPU instruction ===
+   0x80200000 <kern_entry>:	auipc	sp,0x3
+   0x80200004 <kern_entry+4>:	mv	sp,sp
+   0x80200008 <kern_entry+8>:	j	0x8020000a <kern_init>
+   0x8020000a <kern_init>:	auipc	a0,0x3
+Hardware watchpoint 1: *(unsigned int *)0x80200000
+0x0000000080000000 in ?? ()
+
+=== OpenSBI entry after six reset instructions ===
+pc             0x80000000	0x80000000
+a0             0x0	0
+a1             0x87e00000	2279604224
+a2             0x1028	4136
+=> 0x80000000:	add	s0,a0,zero
+   0x80000004:	add	s1,a1,zero
+   0x80000008:	add	s2,a2,zero
+   0x8000000c:	jal	0x80000678
+Breakpoint 2 at 0x80200000: file kern/init/entry.S, line 7.
+
+Breakpoint 2, kern_entry () at kern/init/entry.S:7
+7	    la sp, bootstacktop
+
+=== Kernel entry and privilege state ===
+pc             0x80200000	0x80200000 <kern_entry>
+sp             0x80045e30	0x80045e30
+ra             0x80005b52	0x80005b52
+a0             0x0	0
+a1             0x87e00000	2279604224
+mstatus        0x8000000a00006080	SD:1 VM:00 MXR:0 PUM:0 MPRV:0 XS:0 FS:3 MPP:0 HPP:0 SPP:0 MPIE:1 HPIE:0 SPIE:0 UPIE:0 MIE:0 HIE:0 SIE:0 UIE:0
+mepc           0x80200000	2149580800
+satp           0x0	0
+=> 0x80200000 <kern_entry>:	auipc	sp,0x3
+   0x80200004 <kern_entry+4>:	mv	sp,sp
+   0x80200008 <kern_entry+8>:	j	0x8020000a <kern_init>
+   0x8020000a <kern_init>:	auipc	a0,0x3
+   0x8020000e <kern_init+4>:	addi	a0,a0,-2
+   0x80200012 <kern_init+8>:	auipc	a2,0x3
+$1 = 0x80201000
+$2 = 0x80203000
+$3 = 8192
+9	    tail kern_init
+
+=== Stack initialized ===
+pc             0x80200008	0x80200008 <kern_entry+8>
+sp             0x80203000	0x80203000 <SBI_CONSOLE_PUTCHAR>
+ra             0x80005b52	0x80005b52
+Breakpoint 3 at 0x8020000a: file kern/init/init.c, line 8.
+
+Breakpoint 3, kern_init () at kern/init/init.c:8
+8	    memset(edata, 0, end - edata);
+
+=== Tail transfer into C ===
+pc             0x8020000a	0x8020000a <kern_init>
+sp             0x80203000	0x80203000 <SBI_CONSOLE_PUTCHAR>
+ra             0x80005b52	0x80005b52
+$4 = 0x80203008
+$5 = 0x80203008
+Breakpoint 4 at 0x80200056: file kern/libs/stdio.c, line 40.
+
+Breakpoint 4, cprintf (fmt=fmt@entry=0x802004d0 "%s\n\n") at kern/libs/stdio.c:40
+40	    va_start(ap, fmt);
+
+=== BSS initialization completed; cprintf called ===
+pc             0x80200056	0x80200056 <cprintf>
+sp             0x80202ff0	0x80202ff0
+0x802004d0:	"%s\n\n"
+0x802004b0:	"(THU.CST) os is loading ...\n"
+kern_init () at kern/init/init.c:12
+12	   while (1)
+Value returned is $6 = 30
+
+=== Output complete; final kernel loop ===
+=> 0x8020003a <kern_init+48>:	j	0x8020003a <kern_init+48>
+   0x8020003c <cputch>:	addi	sp,sp,-16
+   0x8020003e <cputch+2>:	sd	s0,0(sp)
+   0x80200040 <cputch+4>:	sd	ra,8(sp)
+pc             0x8020003a	0x8020003a <kern_init+48>
+sp             0x80202ff0	0x80202ff0
+12	   while (1)
+[Inferior 1 (process 1) detached]
