@@ -18,3 +18,10 @@ __pycache__/
 .pytest_cache/
 build/
 dist/
+
+# Lab source archive, generated kernel and screenshot renderer profile
+lab1.zip
+.lab1-source/
+.edge-lab1/
+code/obj/
+code/bin/
