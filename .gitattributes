@@ -1,6 +1,0 @@
-* text=auto
-*.png binary
-/code/** text eol=lf
-/report/** text eol=lf
-README.md text eol=lf
-.gitignore text eol=lf
