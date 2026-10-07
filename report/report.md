@@ -15,7 +15,7 @@
 | 成员 | 负责的练习/模块 |
 |------|----------------|
 | 2412303-袁煜杰 | 待填写 |
-| 2413625-张龙飞 | 待填写 |
+| 2413625-张龙飞 | 练习完成以及细节处理与补充 |
 | 2413357-王逸凌 | 待填写 |
 
 实验报告如何分工？
@@ -40,7 +40,7 @@
 | 成员 | AI 编程工具 | 底层模型 | 备注 |
 |------|------------|---------|------|
 | 2412303-袁煜杰 | Codex | GPT-6.1 Sol Medium  | 无 |
-| 2413625-张龙飞 | 待填写 | 待填写 | 待填写 |
+| 2413625-张龙飞 | opencode | Kimi-K3 | 无 |
 | 2413357-王逸凌 | 待填写 | 待填写 | 待填写 |
 
 **说明：**
@@ -164,72 +164,151 @@ Post-Condition：内核能够编译、启动并输出信息，GDB 能跟踪到�
 
 ### 练习：理解内核启动中的程序入口操作
 
-**负责人：** 待填写（学号-姓名）
+**负责人：** 2413625-张龙飞
 
-`la sp, bootstacktop` 将启动栈顶的地址装入 `sp`，而不是读取该地址中的数据。源码预留 8192 字节栈空间，栈向低地址增长，因此以空间末端作为初始栈顶。该操作为 C 函数的局部变量、寄存器保存和函数调用提供内核自己的栈。
-
-本次链接后，该伪指令展开为：
+`kern/init/entry.S` 定义了内核执行的第一条指令，其正文只有两条：
 
 ```asm
-0x80200000: auipc sp, 0x3
-0x80200004: mv    sp, sp
+kern_entry:
+    la sp, bootstacktop
+    tail kern_init
 ```
 
-执行后，`sp` 从 `0x80045e30` 变为 `0x80203000`，等于 `bootstacktop`，满足 16 字节对齐。栈空间为 `0x80201000` 至 `0x80203000`，不包含末端地址。
+**`la sp, bootstacktop`**
 
-`tail kern_init` 将控制流转交给 C 初始化函数，不为该跳转设置新的返回地址。本次链接器将其松弛为：
+`la`（load address）把某个符号的地址加载进寄存器，而不是读取该地址中的数据。所以这条指令完成的操作是：**把符号 `bootstacktop` 的地址装入 `sp` 寄存器**，使 `sp` 指向一个合法的栈顶。
 
-```asm
-0x80200008: j 0x8020000a <kern_init>
-```
+它的目的是**为后续用 C 语言编写的内核初始化函数建立初始内核栈**，使内核可以安全地执行 C 代码。`.data` 段中用 `.space KSTACKSIZE` 预留了 8192 字节的 `bootstack`，栈向低地址增长，因此取空间的末端 `bootstacktop` 作为初始栈顶（栈空间本身不包含末端地址）。C 函数的局部变量、寄存器保存和函数调用都要用栈，在跳进 C 代码之前必须先把 `sp` 指向可用内存，否则任何压栈都会写到非法地址。
 
-转移前后 `ra` 均为 `0x80005b52`，说明尾跳转保持返回地址寄存器。`kern_init` 标记为 `noreturn` 且最终无限循环，因此不需要返回汇编入口。
+**`tail kern_init`**
+
+`tail` 是尾调用伪指令，直接跳转到 `kern_init`，并且**不保存返回地址**（不写 `ra`）。所以这条指令完成的操作是：**把控制权从汇编入口 `kern_entry` 转移给 C 语言函数 `kern_init`**。
+
+它的目的是**进入 C 语言内核初始化函数，开始真正的内核启动流程**。`kern_init` 声明为 `noreturn` 且最终进入死循环，不需要再返回汇编入口，因此用尾跳转而不是普通调用：既省去一次返回地址的写入，也符合"入口只执行一次"的语义。
 
 ---
 
 ### 练习：使用 GDB 验证启动流程
 
-**负责人：** 待填写（学号-姓名）
+**负责人：** 2413625-张龙飞
 
-在 `code/` 下用两个终端分别运行 `make debug` 和 `make gdb GDB=gdb-multiarch`。`-S` 使 CPU 在第一条指令前暂停，`-s` 开启 1234 调试端口。自动验证使用 `python3 tools/verify.py`，实际 GDB 退出状态为 0。
+目标是使用 GDB 跟踪 QEMU 模拟的 RISC-V 从加电开始，直到执行内核第一条指令（跳转到 `0x80200000`）的整个过程。在 `code/` 下用两个终端分别运行：
 
-主要调试命令如下：
-
-```gdb
-info registers pc a0 a1 a2 sp
-x/6i 0x1000
-x/4gx 0x1018
-x/4i 0x80200000
-si 6
-break *0x80200000
-continue
-info registers pc sp ra a0 a1 mstatus mepc satp
-si 2
-break kern_init
-continue
-break cprintf
-continue
-finish
+```bash
+make debug   # 启动 QEMU 并等待 gdb 连接
+make gdb     # 启动 gdb 并连接调试端口
 ```
 
-加电后最初执行的六条指令位于 QEMU `virt` 的 MROM：
+#### 调试过程
+
+**1. 观察复位后的第一条指令**
+
+```gdb
+(gdb) i r pc
+pc             0x1000   0x1000
+(gdb) x/8i 0x1000
+=> 0x1000:      auipc   t0,0x0      # 获取当前代码基址，准备相对寻址
+   0x1004:      addi    a2,t0,40    # 初始化传递参数
+   0x1008:      csrr    a0,mhartid  # 决定哪个核心
+   0x100c:      ld      a1,32(t0)   # 传递启动信息参数
+   0x1010:      ld      t0,24(t0)   # 准备跳转
+   0x1014:      jr      t0          # 跳转到 t0 中地址，进入 OpenSBI 主初始化代码
+   0x1018:      unimp
+   0x101a:      .insn   2, 0x8000
+```
+
+**2. 在内核入口设置断点**
+
+```gdb
+(gdb) watch *0x80200000
+Hardware watchpoint 1: *0x80200000
+(gdb) b *0x80200000
+Breakpoint 1 at 0x80200000: file kern/init/entry.S, line 7.
+(gdb) info breakpoints
+Num     Type           Disp Enb Address            What
+1       breakpoint     keep y   0x0000000080200000 kern/init/entry.S:7
+(gdb) continue
+Continuing.
+```
+
+`continue` 后 debug 窗口出现 OpenSBI 横幅，说明固件已成功启动，接下来等待运行到断点即可。
+
+**3. 遇到的问题：断点始终不命中**
+
+程序并没有自动停在内核入口，按 `Ctrl+C` 打断时发现 PC 一直指向 `0x80000408`：
+
+```gdb
+^C
+Program received signal SIGINT, Interrupt.
+0x0000000080000408 in ?? ()
+```
+
+用 `x/10i 0x80000408` 反汇编，发现这里是 OpenSBI 的 Trap Handler（异常处理入口），负责保存上下文和切换栈。最初的推测是：GDB 发送的 SIGINT 信号被 QEMU 视作调试异常，触发了 SBI 的异常响应，导致时钟中断时序被打乱，SBI 未能自动执行 `mret` 跳转。但后续排查否定了这一推测。
+
+**4. 定位真正原因**
+
+先脱离 GDB 直接 `make qemu` 观察，串口只打印 OpenSBI 横幅，没有 `(THU.CST) os is loading ...`，说明问题不在 GDB，而是内核根本没有拿到控制权。再连上 GDB 查看异常现场：
+
+```gdb
+(gdb) i r mepc mtvec mstatus
+mepc           0x0                 0x0
+mtvec          0x80000408          0x80000408
+mstatus        0x8000000a00006900
+```
+
+- `mepc = 0x0`：发生异常时正在执行的地址是 `0x0`；
+- `mtvec = 0x80000408`：正是前面看到的 OpenSBI 异常向量入口；
+- `mstatus` 中 MPP=1：说明异常来自 S 模式。
+
+也就是说，**OpenSBI 最后跳到了 `0x0` 而不是 `0x80200000`**，在 `0x0` 取指触发异常，落回 M 模式的 Trap Handler，如此反复形成死循环，所以断点永远等不到。先前关于时钟中断时序的推测不成立。
+
+根因在于固件类型不同：QEMU 7.0.0 自带的 OpenSBI v1.0 是 **fw_dynamic** 固件，下一级启动地址由 QEMU 在运行时动态告知，只有使用 `-kernel` 参数时 QEMU 才会把 `0x80200000` 写给它；而 Makefile 中使用的是 `-device loader,file=$(UCOREIMG),addr=0x80200000`，QEMU 并不知道这是一个可引导内核，于是写入 `0x0`（OpenSBI 横幅中的 `Domain0 Next Address: 0x0000000000000000` 可以印证）。旧版 QEMU 自带的 OpenSBI v0.6 是 **fw_jump** 固件，跳转地址在编译期就固定为 `0x80200000`，所以指导书上的写法在旧环境下不会暴露这个问题。
+
+**5. 修复后重新验证**
+
+把 Makefile 中 `qemu` 和 `debug` 两个目标里的 `-device loader,file=$(UCOREIMG),addr=0x80200000` 改为 `-kernel $(UCOREIMG)`，让 QEMU 把内核入口地址告诉 OpenSBI。修改后重新 `make debug`、`make gdb`：
+
+```gdb
+(gdb) b *0x80200000
+Breakpoint 1 at 0x80200000: file kern/init/entry.S, line 7.
+(gdb) continue
+Continuing.
+
+Breakpoint 1, kern_entry () at kern/init/entry.S:7
+7	    la sp, bootstacktop     # 断点成功命中，停在内核第一条指令
+```
+
+断点成功命中。查看内核最初的几条指令并单步执行：
+
+```gdb
+(gdb) x/4i $pc
+=> 0x80200000 <kern_entry>:   auipc   sp,0x3
+   0x80200004 <kern_entry+4>: mv      sp,sp
+   0x80200008 <kern_entry+8>: j       0x8020000a <kern_init>
+   0x8020000a <kern_init>:    auipc   a0,0x3
+(gdb) si
+(gdb) i r sp
+sp             0x80203000	0x80203000   # la sp, bootstacktop 执行后，sp 指向栈顶 bootstacktop
+```
+
+继续 `si`，PC 跳转到 `0x8020000a` 进入 C 函数 `kern_init`，debug 窗口随后打印出 `(THU.CST) os is loading ...`，启动流程验证成功。
+
+#### 观察结果与回答
+
+RISC-V 硬件加电后最初执行的几条指令位于**复位地址 `0x1000`**（QEMU `virt` 平台的 MROM 中），主要完成的功能如下：
 
 | 地址 | 指令 | 功能 |
 |------|------|------|
-| `0x1000` | `auipc t0,0x0` | 取得复位跳板基址 `0x1000` |
-| `0x1004` | `addi a2,t0,40` | 将 `a2` 设为固件动态信息地址 `0x1028` |
-| `0x1008` | `csrr a0,mhartid` | 读取 hart 编号，本次为 0 |
-| `0x100c` | `ld a1,32(t0)` | 读取设备树指针，本次为 `0x87e00000` |
-| `0x1010` | `ld t0,24(t0)` | 读取 OpenSBI 入口 `0x80000000` |
-| `0x1014` | `jr t0` | 跳入 OpenSBI |
+| `0x1000` | `auipc t0,0x0` | 获取当前代码基址，为相对寻址做准备 |
+| `0x1004` | `addi a2,t0,40` | 初始化要传递给下一级固件的参数 |
+| `0x1008` | `csrr a0,mhartid` | 读取 hart 编号，决定由哪个核启动 |
+| `0x100c` | `ld a1,32(t0)` | 取出设备树地址并传递启动信息参数 |
+| `0x1010` | `ld t0,24(t0)` | 取出下一级固件（OpenSBI，`0x80000000`）的入口地址 |
+| `0x1014` | `jr t0` | 跳转到该地址，进入 OpenSBI 主初始化代码 |
 
-这些指令准备固件参数并移交控制权。`0x1018` 之后包含指针与参数数据，不能将其连续反汇编结果全部视为执行指令。`si 6` 后观察到 `pc = 0x80000000`、`a0 = 0`、`a1 = 0x87e00000`、`a2 = 0x1028`。
+即先用 `auipc` 获取自身位置，再读取 `mhartid` 确定当前核，从内置数据表中取出设备树地址和下一级固件地址，最后 `jr` 跳转到 `0x80000000` 的 OpenSBI，把控制权交给固件；OpenSBI 完成主初始化后跳转到 `0x80200000`，内核从 `kern_entry` 开始执行。
 
-在 `0x80200000` 设置断点并继续后，GDB 停在 `kern_entry` 第一条指令，观察到 `pc = mepc = 0x80200000`、`sp = 0x80045e30`、`satp = 0`。OpenSBI 日志给出下一阶段地址 `0x80200000` 和 `S-mode`。随后执行两条入口指令，栈指针正确切换，再进入 `kern_init`。
-
-复位暂停时，`0x80200000` 已能反汇编为内核入口，且内存前 16 字节与镜像一致，说明本次镜像由 QEMU 在 CPU 执行前预加载。写监视点不能追溯该加载过程，因此通过入口断点验证执行交接。
-
-进入 C 后，`edata = end = 0x80203008`，本次 BSS 区间为空。`cprintf` 输出启动字符串，返回字符计数为 30。最终 PC 位于 `0x8020003a`，指令跳转到自身；单步三次后 PC 不变，确认进入死循环。
+**补充：** `watch *0x80200000` 一直没有触发，是因为内核在 QEMU 复位阶段（CPU 开始执行之前）就已经被写入 `0x80200000`，执行期间这块内存没有再被写过。
 
 ---
 
@@ -245,7 +324,7 @@ finish
 
 **测试截图：**
 
-以下为实测日志页面截图。当前压缩包未提供 `tools/grade.sh`，因此未执行 `make grade`，采用构建、QEMU 输出和 GDB 断言验证。
+以下为实测日志页面截图。原始代码未提供 `tools/grade.sh`，因此未执行 `make grade`，采用构建、QEMU 输出和 GDB 断言验证。
 
 ![复位与 OpenSBI 入口](./images/reset.png)
 
