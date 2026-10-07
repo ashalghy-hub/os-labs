@@ -10,16 +10,11 @@
 
 ### 小组分工
 
-练习如何分工？
-
 | 成员 | 负责的练习/模块 |
 |------|----------------|
 | 2412303-袁煜杰 | 待填写 |
 | 2413625-张龙飞 | 练习完成以及细节处理与补充 |
-| 2413357-王逸凌 | 待填写 |
-
-实验报告如何分工？
-
+| 2413357-王逸凌 | 定稿并且润色报告 |
 
 ---
 
@@ -35,13 +30,13 @@
 
 ## 二、实验环境
 
-你们使用的 AI 工具
+使用的 AI 工具
 
 | 成员 | AI 编程工具 | 底层模型 | 备注 |
 |------|------------|---------|------|
 | 2412303-袁煜杰 | Codex | GPT-6.1 Sol Medium  | 无 |
 | 2413625-张龙飞 | opencode | Kimi-K3 | 无 |
-| 2413357-王逸凌 | 待填写 | 待填写 | 待填写 |
+| 2413357-王逸凌 | 暂无 | 暂无 | 无 |
 
 **说明：**
 
@@ -69,47 +64,13 @@
 
 ### 功能模块：最小内核启动与调试验证
 
-**负责人：** 待填写（学号-姓名）
+**负责人：** 2412303-袁煜杰、2413625-张龙飞、2413357-王逸凌 
 
-#### 模块功能描述
-
-**需要实现/修改的函数：**
-
-```c
-int kern_init(void) __attribute__((noreturn));
-int cprintf(const char *fmt, ...);
-int vcprintf(const char *fmt, va_list ap);
-void cons_putc(int c);
-void sbi_console_putchar(unsigned char ch);
-uint64_t sbi_call(uint64_t sbi_type, uint64_t arg0,
-                  uint64_t arg1, uint64_t arg2);
-```
-
-上述函数由原始代码提供，本次未修改函数实现；实际修改 Makefile 的启动与调试目标，新增 GDB 和自动验证脚本。
+本次lab1并未修改实现；实际修改 Makefile 的启动与调试目标，新增 GDB 和自动验证脚本。最终在各个小组成员的机器上已经复现。
 
 **功能说明：**
 
 `tools/kernel.ld` 确定入口和段布局，Makefile 完成构建。`kern_entry` 设置启动栈并进入 `kern_init`；`kern_init` 使用 `memset` 初始化 BSS，通过 `cprintf` 输出后进入死循环。输出链为 `cprintf → vcprintf → vprintfmt → cputch → cons_putc → sbi_console_putchar → sbi_call`，其中 `ecall` 请求 OpenSBI 服务。GDB 脚本验证入口地址、栈指针、尾跳转和循环，自动脚本保存构建与运行日志。
-
-#### 最终提示词
-
-以下为在 AI 帮助下整理和修改的提示词：
-
-````markdown
-[PROMPT]
-根据 Lab1 指导书和已有代码，完成内核启动实验，并整理实验记录与报告。
-
-[RELY]
-使用项目中的入口汇编、链接脚本和 SBI 输出函数，在 QEMU 中运行，用 GDB 调试。
-
-[GUARANTEE]
-保留原有内核功能，只修改必要的配置或代码；解释栈初始化和入口跳转的作用。
-
-[SPECIFICATION]
-Pre-Condition：实验环境和工具已准备好。
-Post-Condition：内核能够编译、启动并输出信息，GDB 能跟踪到内核入口。
-记录实际遇到的问题、修改方法和测试结果，报告按模板完成。
-````
 
 #### 实现迭代过程
 
