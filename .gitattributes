@@ -4,3 +4,4 @@
 /report/** text eol=lf
 README.md text eol=lf
 .gitignore text eol=lf
+report/images/*.png binary
