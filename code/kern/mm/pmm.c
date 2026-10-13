@@ -62,6 +62,108 @@ size_t nr_free_pages(void) {
 }
 
 //lab2 function1 YOUR CODE
+static void page_init(void);
+
+static void page_init(void) {
+    // 1. init virtual-physical offset first: PADDR() depends on it.
+    // High-half direct mapping satisfies VA = PA + PHYSICAL_MEMORY_OFFSET.
+    va_pa_offset = PHYSICAL_MEMORY_OFFSET;
+
+    // 2. fetch RAM range from device tree (dtb_init() already ran in kern_init).
+    uint64_t mem_begin = get_memory_base();
+    uint64_t mem_size = get_memory_size();
+    uint64_t mem_end = 0;
+    if (__builtin_add_overflow(mem_begin, mem_size, &mem_end)) {
+        panic("page_init: memory range overflow (base %lx size %lx)\n", mem_begin, mem_size);
+    }
+
+    // 3. total physical pages = PPN(mem_end) (floor for unaligned end).
+    // Test expects exactly PPN(mem_base + mem_size).
+    npage = PPN(mem_end);
+    if (npage <= nbase) {
+        panic("page_init: npage %lu <= nbase %lu\n", (unsigned long)npage, (unsigned long)nbase);
+    }
+
+    // 4. place Page descriptors right after kernel image, page-aligned (virtual addr!).
+    extern char end[];
+    pages = (struct Page *)ROUNDUP((void *)end, PGSIZE);
+
+    // number of Page structs: one per physical page in [DRAM_BASE, mem_end)
+    size_t n = npage - nbase;
+
+    // 5. mark every page descriptor Reserved by default.
+    // default_init_memmap() requires PageReserved == 1 as precondition.
+    for (size_t i = 0; i < n; i ++) {
+        pages[i].flags = (1UL << PG_reserved);
+        pages[i].property = 0;
+        set_page_ref(pages + i, 0);
+    }
+
+    // 6. compute occupied physical range:
+    // kernel image + bootstack + boot page table (all < end via kernel.ld/entry.S)
+    // plus the Page descriptor array itself.
+    // Guard against integer overflow in size computation.
+    if (n > (size_t)-1 / sizeof(struct Page)) {
+        panic("page_init: Page array size overflow\n");
+    }
+    size_t pages_bytes = n * sizeof(struct Page);
+    uintptr_t pages_va = (uintptr_t)pages;
+    if (pages_va > (uintptr_t)-1 - pages_bytes) {
+        panic("page_init: Page array end overflow\n");
+    }
+    uintptr_t array_end_va = pages_va + pages_bytes;
+    uintptr_t freemem_va = ROUNDUP(array_end_va, PGSIZE);
+    // ROUNDUP overflow guard (far from 2^64 in practice, but be strict)
+    if (freemem_va < array_end_va) {
+        panic("page_init: freemem_va overflow\n");
+    }
+    // freemem_va >= KERNBASE holds since pages >= end >= KERNBASE,
+    // so PADDR() is legal here (never treat high-half VA as PA).
+    uintptr_t freemem_pa = PADDR(freemem_va);
+
+    // Explicitly cover bootstack and boot page table even though the
+    // linker already places them before `end`. This documents the
+    // occupied range and stays correct if the layout ever changes.
+    extern char bootstack[], bootstacktop[];
+    extern char boot_page_table_sv39[];
+    uintptr_t bootstack_end_pa = PADDR((uintptr_t)bootstacktop);
+    uintptr_t pt_end_pa = PADDR((uintptr_t)boot_page_table_sv39) + PGSIZE;
+    uintptr_t kern_end_pa = PADDR((uintptr_t)end);
+    if (bootstack_end_pa > freemem_pa) {
+        freemem_pa = ROUNDUP(bootstack_end_pa, PGSIZE);
+    }
+    if (pt_end_pa > freemem_pa) {
+        freemem_pa = ROUNDUP(pt_end_pa, PGSIZE);
+    }
+    if (kern_end_pa > freemem_pa) {
+        freemem_pa = ROUNDUP(kern_end_pa, PGSIZE);
+    }
+    // freemem_pa is page-aligned because every input was rounded up
+    // (PGSIZE divides PHYSICAL_MEMORY_OFFSET, so VA/PA rounding agrees).
+
+    // 7. hand remaining pages to the pmm manager.
+    uint64_t mem_end_aligned = ROUNDDOWN(mem_end, PGSIZE);
+    uintptr_t mem_begin_aligned = (uintptr_t)ROUNDUP(mem_begin, PGSIZE);
+    if (freemem_pa < mem_begin_aligned) {
+        freemem_pa = mem_begin_aligned;
+    }
+    // pa2page() has no lower-bound check: guarantee freemem_pa >= DRAM_BASE.
+    if (freemem_pa < DRAM_BASE) {
+        panic("page_init: freemem %lx below DRAM_BASE\n", (unsigned long)freemem_pa);
+    }
+    if (freemem_pa < mem_end_aligned) {
+        struct Page *base = pa2page(freemem_pa);
+        size_t free_n = (size_t)((mem_end_aligned - freemem_pa) >> PGSHIFT);
+        if (free_n > 0) {
+            init_memmap(base, free_n);
+        }
+    }
+
+    cprintf("page_init: npage=%lu nbase=%lu freemem=%lx mem_end=%lx nr_free=%lu\n",
+            (unsigned long)npage, (unsigned long)nbase,
+            (unsigned long)freemem_pa, (unsigned long)mem_end,
+            (unsigned long)nr_free_pages());
+}
 
 /* pmm_init - initialize the physical memory management */
 void pmm_init(void) {

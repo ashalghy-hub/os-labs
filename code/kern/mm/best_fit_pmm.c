@@ -4,6 +4,66 @@
 #include <stdio.h>
 
 //lab2 function2-2 YOUR CODE
+/* SKELETON FIX: the skeleton's basic_check/best_fit_check use
+ * free_list/nr_free and grade's Test 2 references best_fit_pmm_manager,
+ * but the skeleton defines none of them, so the tree does not even
+ * compile/link before Test 1 (page_init) can run.
+ * Provide minimal definitions here only to unblock the build.
+ * TODO: full best-fit allocator (init/init_memmap/alloc/free/check)
+ * is Exercise 2 and is intentionally left as stubs. */
+static free_area_t free_area;
+#define free_list (free_area.free_list)
+#define nr_free (free_area.nr_free)
+
+static void best_fit_init(void); // TODO: Exercise 2
+static void best_fit_init_memmap(struct Page *base, size_t n); // TODO: Exercise 2
+static struct Page *best_fit_alloc_pages(size_t n); // TODO: Exercise 2
+static void best_fit_free_pages(struct Page *base, size_t n); // TODO: Exercise 2
+static size_t best_fit_nr_free_pages(void); // TODO: Exercise 2
+static void best_fit_check(void);
+
+static void
+best_fit_init(void) {
+    list_init(&free_list);
+    nr_free = 0;
+}
+
+static void
+best_fit_init_memmap(struct Page *base, size_t n) {
+    // TODO(Exercise 2): implement best-fit init_memmap
+    (void)base; (void)n;
+    assert(0 && "best_fit_init_memmap: TODO Exercise 2");
+}
+
+static struct Page *
+best_fit_alloc_pages(size_t n) {
+    // TODO(Exercise 2): implement best-fit alloc
+    (void)n;
+    assert(0 && "best_fit_alloc_pages: TODO Exercise 2");
+    return NULL;
+}
+
+static void
+best_fit_free_pages(struct Page *base, size_t n) {
+    // TODO(Exercise 2): implement best-fit free
+    (void)base; (void)n;
+    assert(0 && "best_fit_free_pages: TODO Exercise 2");
+}
+
+static size_t
+best_fit_nr_free_pages(void) {
+    return nr_free;
+}
+
+const struct pmm_manager best_fit_pmm_manager = {
+    .name = "best_fit_pmm_manager",
+    .init = best_fit_init,
+    .init_memmap = best_fit_init_memmap,
+    .alloc_pages = best_fit_alloc_pages,
+    .free_pages = best_fit_free_pages,
+    .nr_free_pages = best_fit_nr_free_pages,
+    .check = best_fit_check,
+};
 
 // Framework tests: students must not modify basic_check or best_fit_check.
 static void

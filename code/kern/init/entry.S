@@ -57,10 +57,18 @@ bootstacktop:
 # 分配 4KiB 内存给预设的三级页表
 boot_page_table_sv39:
     # 0xffffffff_c0000000 map to 0x80000000 (1G)
-    # 前 511 个页表项均设置为 0 ，因此 V=0 ，意味着是空的(unmapped)
-    .zero 8 * 511
+    # /* SKELETON FIX: original table only mapped the high half (index 511).
+    #  * After `csrw satp`, the CPU keeps fetching at the low PC
+    #  * (0x80200038...), which then has no mapping -> exec page fault
+    #  * before kern_init ever runs, so grading tests are unreachable.
+    #  * Add the identity mapping at index 2 (VA 0x80000000 -> PA 0x80000000,
+    #  * 1G page) so the trampoline between satp and the jump to the
+    #  * high-half `kern_init` stays executable. */
+    .zero 8 * 2
+    .quad (0x80000 << 10) | 0xcf # VPN2=2: identity map 0x80000000 -> 0x80000000 (1G, VRWXAD)
+    .zero 8 * (511 - 3)
     # 设置最后一个页表项，PPN=0x80000，标志位 VRWXAD 均为 1
-    .quad (0x80000 << 10) | 0xcf # VRWXAD
+    .quad (0x80000 << 10) | 0xcf # VPN2=511: 0xffffffffc0000000 -> 0x80000000 (1G, VRWXAD)
 
     .global boot_hartid
 boot_hartid:
