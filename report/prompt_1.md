@@ -127,3 +127,37 @@
 
 自己看实现，C语言都看不明白就滚吧。
 
+
+EOI:
+     实现完成。page_init() 已加入 kern/mm/pmm.c:67，原型为 static void page_init(void);，位于 pmm_init() 之前。
+
+     实现逻辑：
+
+     1. 先置 va_pa_offset = PHYSICAL_MEMORY_OFFSET（0xFFFFFFFF40000000），否则 PADDR() 非法。满足 VA = PA + OFFSET，从不对高半区 VA 当 PA 用。
+     2. mem_begin/size = get_memory_base/size()，__builtin_add_overflow 防 base+size 溢出，npage = PPN(mem_end)，与测试 PPN(mem_base+mem_size) 一致，并断言 npage >
+        nbase（nbase = DRAM_BASE/PGSIZE）。
+     3. pages = ROUNDUP(end, PGSIZE)（虚拟地址，页对齐、>=end），共 n = npage-nbase 个描述符，与 page2ppn/pa2page 的 nbase 偏置对应。
+     4. 全部 flags = 1<<PG_reserved, property=0, ref=0，满足 default_init_memmap() 的 PageReserved 前置条件。
+     5. 描述符字节数 n*sizeof(Page) 做乘法/加法溢出检查，freemem_va = ROUNDUP(pages_va+bytes)，freemem_pa = PADDR(freemem_va)；再显式 max(PADDR(bootstacktop), PADDR(
+        boot_page_table)+PGSIZE, PADDR(end))（三者本就在 end 之前，文档化已占用范围）。
+     6. mem_end_aligned = ROUNDDOWN(mem_end)，freemem 与 mem_begin 对齐后若 freemem < mem_end 则 init_memmap(pa2page(freemem), (mem_end-freemem)>>PGSHIFT)。保证 freemem
+        >= DRAM_BASE（pa2page 无下界检查），已占用页保持 Reserved 不进空闲链表，无整数溢出。
+
+     框架修复（均已标明）：
+
+     - kern/mm/best_fit_pmm.c：骨架引用了未定义的 free_list/nr_free 和缺失 best_fit_pmm_manager，根本编译不过。加 /* SKELETON FIX */ 的最小 free_area 定义 + TODO
+       Exercise 2 存根 manager，仅为放行构建/Test1，不实现 best-fit。
+     - kern/init/entry.S：/* SKELETON FIX */，原页表只有 index511 高半区映射，csrw satp 后低 PC（0x80200038）无映射，-d int 可见 exec_page_fault epc=0x80200000 死循环，
+       测不到试。补 index2 恒等映射 0x80000000->0x80000000 (1G)。
+
+     编译与测试（工具链 riscv64-linux-gnu-，本机无 riscv64-unknown-elf-）：
+
+     - make GCCPREFIX=riscv64-linux-gnu- 通过，无警告（-Werror）。
+     - 注入 tools/inject.py 到临时拷贝后 make 通过，qemu -kernel bin/ucore.img 输出：
+       page_init: npage=557056 nbase=524288 freemem=80348000 mem_end=88000000 nr_free=31928
+       check_alloc_page() succeeded!
+       [Test 1] Page Init: PASS
+       [Test 2] Best-Fit: FAIL (pmm_manager=default_pmm_manager)
+       Test1 通过；Test2 失败属预期（Exercise2 未做，pmm_manager 保持 default，且未硬编码测试结果）。
+     - 原树（未注入）同样启动并 check_alloc_page() succeeded!。
+
