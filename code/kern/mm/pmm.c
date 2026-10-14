@@ -34,8 +34,10 @@ static void check_alloc_page(void);
 
 // init_pmm_manager - initialize a pmm_manager instance
 static void init_pmm_manager(void) {
-    pmm_manager = &default_pmm_manager;
+    // 1. select Best-Fit so page registration, allocation and checks use it.
+    pmm_manager = &best_fit_pmm_manager;
     cprintf("memory management: %s\n", pmm_manager->name);
+    // 2. initialize the manager before page_init() registers available pages.
     pmm_manager->init();
 }
 
