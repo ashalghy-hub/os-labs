@@ -1,5 +1,6 @@
 #include <default_pmm.h>
 #include <best_fit_pmm.h>
+#include <buddy_pmm.h>
 #include <defs.h>
 #include <error.h>
 #include <memlayout.h>
@@ -34,8 +35,12 @@ static void check_alloc_page(void);
 
 // init_pmm_manager - initialize a pmm_manager instance
 static void init_pmm_manager(void) {
-    // 1. select Best-Fit so page registration, allocation and checks use it.
+    // Select Buddy explicitly; retain Best-Fit for the existing lab2 tests.
+#ifdef PMM_USE_BUDDY
+    pmm_manager = &buddy_pmm_manager;
+#else
     pmm_manager = &best_fit_pmm_manager;
+#endif
     cprintf("memory management: %s\n", pmm_manager->name);
     // 2. initialize the manager before page_init() registers available pages.
     pmm_manager->init();
