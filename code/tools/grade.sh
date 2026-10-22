@@ -222,7 +222,10 @@ osimg=$(make_print ucoreimg)
 swapimg=$(make_print swapimg)
 
 ## qemu-options
-qemuopts="-machine virt -nographic -bios default -device loader,file=bin/ucore.img,addr=0x80200000"
+# 注意：与 Makefile 的 qemu 目标一致，用 -kernel 交给 OpenSBI 入口地址；
+# `-device loader,...,addr=0x80200000` 在 QEMU 10.1.5 + OpenSBI v1.5.1 下
+# 会导致 "Domain0 Next Address = 0x0"，内核从未执行。
+qemuopts="-machine virt -nographic -bios default -kernel bin/ucore.img"
 
 ## the lab2 kernel only while(1) after entering kernel mode and never calls readline,
 ## so no break function is needed and brkfun stays empty

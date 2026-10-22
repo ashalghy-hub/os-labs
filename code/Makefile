@@ -5,9 +5,12 @@ SLASH	:= /
 
 V       := @
 
-#ifndef GCCPREFIX
-GCCPREFIX := riscv64-unknown-elf-
-#endif
+# 工具链选择：优先使用 riscv64-unknown-elf-；本机没有该工具链时回退到发行版
+# 的 riscv64-linux-gnu- 交叉工具链（本仓库当前开发环境即如此）。
+# 命令行/环境变量 GCCPREFIX=... 仍然优先（可用 ifndef 检测到）。
+ifndef GCCPREFIX
+GCCPREFIX := $(shell sh -c 'command -v riscv64-unknown-elf-gcc >/dev/null 2>&1 && echo riscv64-unknown-elf- || echo riscv64-linux-gnu-')
+endif
 
 ifndef QEMU
 QEMU := qemu-system-riscv64
@@ -160,19 +163,25 @@ TARGETS: $(TARGETS)
 
 .DEFAULT_GOAL := TARGETS
 .PHONY: qemu spike test
+# 引导方式说明：本工程的内核以 0xFFFFFFFFC0200000 链接，由 OpenSBI 移交
+# 控制权后从物理地址 0x80200000 执行。旧写法 `-device loader,file=...,addr=
+# 0x80200000` 只把镜像写进内存、不会把入口地址告诉固件；在当前工具环境
+# (QEMU 10.1.5 + 自带 OpenSBI v1.5.1) 下 OpenSBI 的 "Domain0 Next Address"
+# 会是 0x0，内核从未执行。改用 `-kernel $(UCOREIMG)`（裸二进制，QEMU 同样
+# 装载到 0x80200000）可把入口交给 OpenSBI，启动恢复正常。
 qemu: $(UCOREIMG) $(SWAPIMG) $(SFSIMG)
 	$(V)$(QEMU) \
 		-machine virt \
 		-nographic \
 		-bios default \
-		-device loader,file=$(UCOREIMG),addr=0x80200000
+		-kernel $(UCOREIMG)
 
 debug: $(UCOREIMG) $(SWAPIMG) $(SFSIMG)
 	$(V)$(QEMU) \
 		-machine virt \
 		-nographic \
 		-bios default \
-		-device loader,file=$(UCOREIMG),addr=0x80200000\
+		-kernel $(UCOREIMG) \
 		-s -S
 
 gdb:
@@ -186,7 +195,7 @@ test: $(UCOREIMG) $(SWAPIMG) $(SFSIMG)
 		-machine virt \
 		-nographic \
 		-bios default \
-		-device loader,file=$(UCOREIMG),addr=0x80200000
+		-kernel $(UCOREIMG)
 spike: $(UCOREIMG) $(SWAPIMG) $(SFSIMG)
 	$(V)$(SPIKE) $(UCOREIMG)
 

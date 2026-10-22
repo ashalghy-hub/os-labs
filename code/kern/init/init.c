@@ -1,6 +1,7 @@
 #include <console.h>
 #include <defs.h>
 #include <pmm.h>
+#include <slub.h>
 #include <stdio.h>
 #include <string.h>
 #include <dtb.h>
@@ -37,7 +38,9 @@ int kern_init(void) {
     print_kerninfo();
 
     // grade_backtrace();
-    pmm_init();  // init physical memory management
+    pmm_init();   // init physical memory management
+    slub_init();  // init the SLUB object allocator (on top of the page
+                  // allocator; prints its own smoke result + fixed overhead)
 
     /* do nothing */
     while (1)
