@@ -199,6 +199,33 @@ test: $(UCOREIMG) $(SWAPIMG) $(SFSIMG)
 spike: $(UCOREIMG) $(SWAPIMG) $(SFSIMG)
 	$(V)$(SPIKE) $(UCOREIMG)
 
+# -------------------------------------------------------------------
+# SLUB 测试构建/运行：
+#   make slub-test         默认 Best-Fit 页分配器 + -DSLUB_TEST
+#   make slub-test-buddy   PMM_USE_BUDDY 页分配器 + -DSLUB_TEST
+# 切换配置前强制 clean（不同 -D 组合不能复用旧对象文件）。
+# 运行判定由 tools/slub_test/run_slub_test.sh 完成：内核通过后仍在
+# 空转（while(1)），因此不看 QEMU 退出码，而是轮询 SLUB_TEST_PASS /
+# SLUB_TEST_FAIL / panic 标记并带超时。
+SLUB_TEST_TIMEOUT ?= 300
+SLUB_TEST_IMG     := bin/ucore.img
+
+.PHONY: slub-test slub-test-buddy
+slub-test:
+	$(V)$(MAKE) clean
+	$(V)$(MAKE) DEFS="$(DEFS) -DSLUB_TEST"
+	$(V)$(SH) tools/slub_test/run_slub_test.sh $(SLUB_TEST_IMG) $(SLUB_TEST_TIMEOUT)
+
+slub-test-buddy:
+	$(V)$(MAKE) clean
+	$(V)$(MAKE) DEFS="$(DEFS) -DSLUB_TEST -DPMM_USE_BUDDY"
+	$(V)$(SH) tools/slub_test/run_slub_test.sh $(SLUB_TEST_IMG) $(SLUB_TEST_TIMEOUT)
+
+# 宿主侧测试（同一份 slub.c + 同一份 slub_test.c 构建到 Linux 用户态）：
+#   make slub-test-host    顺序用例 + 真多线程并发用例 + 负向用例（fork 子进程）
+slub-test-host:
+	$(V)$(MAKE) -C tools/host run-all
+
 .PHONY: grade touch
 
 GRADE_GDB_IN	:= .gdb.in

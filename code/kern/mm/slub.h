@@ -124,4 +124,12 @@ size_t slub_fault_hits(void);      /* 已触发的失败次数 */
  * 出现问题直接 panic（不静默），无问题时无副作用返回。 */
 void slub_check_ptr(void *ptr);
 
+#ifdef SLUB_DEBUG
+/* 全局一致性校验（测试/调试用，静止态调用）：
+ * 空闲链无环且不越界、freelist+inuse==capacity、partial/empty/full 状态
+ * 与链表归属一致、对象四态互斥（Σinuse == 用户+sheaf+barn 计数）。
+ * 返回 NULL 表示一致；否则返回静态错误描述串（下次调用前有效）。 */
+const char *slub_debug_validate(void);
+#endif
+
 #endif /* !__KERN_MM_SLUB_H__ */

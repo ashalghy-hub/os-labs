@@ -49,8 +49,9 @@
  *  5. 侵入式空闲链的链接指针写在“空闲对象”内部，因此对象至少 16 字节
  *     且 16 字节对齐（>= 指针宽度）。
  *  6. slab 元数据是静态描述符池（SLUB_MAX_SLABS），按 base 排序的静态
- *     索引数组供锁无关二分查找归属；插入/删除在 index 锁下逐元素移位，
- *     所有中间态保持“有序含重复”，读侧始终收敛到唯一正确区间。
+ *     索引数组供二分查找归属；插入/删除在 index 锁下逐元素移位。查找侧
+ *     同样持 index 锁（早期版本尝试“锁无关读”，被多线程压测证伪，见
+ *     slub_slab_lookup 处的说明）。
  *
  * ============================ 锁顺序 ============================
  *  1. local  (每 CPU/每尺寸类 sheaf 临界区；内核后端=关本地中断+屏障，
@@ -70,8 +71,9 @@
  * ============================ 跨 CPU 释放路径 ============================
  *  CPU A: kmalloc -> slab/其他 CPU 的 barn -> 本地 sheaf -> 用户；
  *  对象经任何跨 CPU 通道（本分配器的 barn 锁，或测试自建的同步队列）
- *  传递时都存在 release-acquire 链，因此 CPU B 的 kfree 做锁无关二分查找
- *  时必然能看到该 slab 的索引项（与 Linux 的 virt_to_slab() 无锁读同构）。
+ *  传递后，CPU B 的 kfree 通过 index 锁下的二分查找定位 slab（读写同锁，
+ *  不依赖跨 CPU 的可见性时序；锁序 cache(3) -> index(4) 与创建/销毁路径
+ *  同向，无新增死锁面）。
  *  CPU B: kfree -> 二分归属 -> 本地 sheaf（快）-> barn（批量中转）->
  *         slab 空闲链（慢，cache 锁）；对象可以留在其他 CPU 的 sheaf/barn
  *         中，后续由任一 CPU 继续分配出去（这是 sheaf/barn 的设计意图）。
@@ -96,6 +98,12 @@
 
 #include <slub.h>
 #include <slub_port.h>
+#include <string.h>
+
+#ifdef SLUB_HOST_PORT
+/* 宿主侧仅 slub_debug_validate 的错误串格式化需要 snprintf */
+#include <stdio.h>
+#endif
 
 /* ------------------------- 内部常量 ------------------------- */
 
@@ -262,16 +270,35 @@ static unsigned int slub_sheaf_drain(struct slub_sheaf *sf, void **out) {
 /* ------------------------- slab 归属索引 ------------------------- */
 
 /*
- * 锁无关二分查找：数组始终按 base 升序（插入/删除在 index 锁下逐元素
- * 移位，中间态为“有序含重复”，因此始终收敛）。正确性依赖发布顺序：
- * slab 建立索引在 cache 锁（release）内完成，任何跨 CPU 的对象传递都
- * 经过 release-acquire 链（barn 锁或测试自建同步），所以释放方必能看到。
+ * slab 归属查找。
+ *
+ * 历史教训：这里曾是"锁无关二分查找"（作者假设插入/删除的中间态保持
+ * "有序含重复"，读者总能收敛）。宿主多线程压测（tools/host，4 线程，
+ * aarch64 弱内存序）证伪了该假设：
+ *   - 插入在 index 锁下逐元素右移，读者可能同时看到"新的部分移位结果 +
+ *     旧的 slub_index_nr"（跨地址 store 的可见顺序不受保证），数组瞬时
+ *     既不有序也不含正确的重复项，二分会漏掉合法 slab；
+ *   - slab 销毁后描述符立即回池复用（base 被改写），并发读者还可能命中
+ *     残留的尾部重复项，读到复用中的描述符，排序假设彻底破坏。
+ *   表现：kfree(小对象) 查不到 slab -> 被误判为大对象 ->
+ *   panic "no slab and no valid large header"（宿主 seed=1 可复现）。
+ * 修复：读侧同样持 slub_index_lock。锁序：cache(3) -> index(4) 已合法
+ * （slub_slab_create/destroy 也是这个方向嵌套），无新增死锁面；内核单核
+ * 下该锁无竞争，多核下每 kfree 一次全局自旋是本教学实现接受的简化。
+ *
+ * 返回的 slab 描述符在锁释放后仍安全：调用方要释放的对象此刻必然处于
+ * "用户持有"态（inuse >= 1），而销毁的前提是 inuse == 0，因此描述符
+ * 与其页面在本次 kfree 完成前不会消失。
  */
 static struct slub_slab *slub_slab_lookup(const void *ptr) {
     uintptr_t a = (uintptr_t)ptr;
-    unsigned int lo = 0, hi = slub_index_nr, mid;
-    struct slub_slab *s;
+    unsigned int lo, hi, mid;
+    struct slub_slab *s = NULL;
+    slub_port_flags_t f;
 
+    slub_port_spin_lock(&slub_index_lock, &f);
+    lo = 0;
+    hi = slub_index_nr;
     while (lo < hi) {
         mid = lo + (hi - lo) / 2;
         s = slub_index[mid];
@@ -280,10 +307,12 @@ static struct slub_slab *slub_slab_lookup(const void *ptr) {
         } else if (a >= s->base + (uintptr_t)s->npages * SLUB_PAGE_SIZE) {
             lo = mid + 1;
         } else {
-            return s;
+            break;
         }
+        s = NULL;
     }
-    return NULL;
+    slub_port_spin_unlock(&slub_index_lock, &f);
+    return s;
 }
 
 /* 以下两个函数必须持有 slub_index_lock（层 4） */
@@ -768,7 +797,7 @@ void kfree(void *ptr) {
     slub_check_ptr(ptr);
 #endif
 
-    /* 归属查找（锁无关二分；失败则按大对象处理） */
+    /* 归属查找（index 锁下二分；失败则按大对象处理） */
     s = slub_slab_lookup(ptr);
     if (s != NULL) {
         unsigned int cls = s->cls;
@@ -999,6 +1028,231 @@ size_t slub_fault_hits(void) {
 }
 
 /* ------------------------- 调试检查 ------------------------- */
+
+#ifdef SLUB_DEBUG
+/*
+ * slub_debug_validate —— 全局一致性校验（测试/调试用，静止态调用）。
+ *
+ * 校验不变量（见文件头“关键不变量”）：
+ *  1. 每个 slab 的侵入式空闲链无环（长度 <= capacity）、链上对象都
+ *     页内对齐且落在本 slab 槽位上；
+ *  2. freelist 长度 + inuse == capacity；
+ *  3. partial 链上的 slab 状态为 PARTIAL 且空闲链非空；empty 链上的
+ *     slab 状态为 EMPTY 且 inuse==0；不在任何链上的 slab 为 FULL 且
+ *     空闲链为空；
+ *  4. 对象四态互斥（按计数验证）：Σ slab->inuse == 用户持有数 +
+ *     Σ sheaf 内对象数 + barn 内对象数。
+ *
+ * 返回 NULL 表示一致；否则返回静态错误描述串（非线程安全，静止态用）。 */
+const char *slub_debug_validate(void) {
+    unsigned int cls, cpu, i;
+    static char err[96];
+    size_t slab_inuse_sum = 0;
+    slub_port_flags_t f;
+
+    /* 1) 遍历全局归属索引：覆盖 partial/full/empty 的全部 slab */
+    slub_port_spin_lock(&slub_index_lock, &f);
+    for (i = 0; i < slub_index_nr; i++) {
+        struct slub_slab *s = slub_index[i];
+        struct slub_cache *c;
+        struct slub_slab *entry;
+        size_t len;
+
+        if (s->cls >= SLUB_NCLASSES || s->state == 0 || s->npages == 0 ||
+            s->capacity == 0) {
+            snprintf(err, sizeof(err), "index entry %u invalid", i);
+            slub_port_spin_unlock(&slub_index_lock, &f);
+            return err;
+        }
+        c = &slub_caches[s->cls];
+        /* 空闲链走查：对象必须是本 slab 合法槽位；环/重复会突破长度上界 */
+        for (len = 0, entry = s->freelist; entry != NULL;
+             entry = *(void **)entry) {
+            uintptr_t off = (uintptr_t)entry - s->base;
+            if (off % c->objsize != 0 ||
+                off >= (uintptr_t)s->npages * SLUB_PAGE_SIZE) {
+                snprintf(err, sizeof(err),
+                         "slab %lx freelist entry %lx not a slot",
+                         (unsigned long)s->base,
+                         (unsigned long)(uintptr_t)entry);
+                slub_port_spin_unlock(&slub_index_lock, &f);
+                return err;
+            }
+            if (++len > s->capacity) {
+                snprintf(err, sizeof(err),
+                         "slab %lx freelist longer than capacity",
+                         (unsigned long)s->base);
+                slub_port_spin_unlock(&slub_index_lock, &f);
+                return err;
+            }
+        }
+        if (len + s->inuse != s->capacity) {
+            snprintf(err, sizeof(err), "slab %lx freelist %lu + inuse %u != %u",
+                     (unsigned long)s->base, (unsigned long)len, s->inuse,
+                     s->capacity);
+            slub_port_spin_unlock(&slub_index_lock, &f);
+            return err;
+        }
+        /* 状态与空闲链一致：FULL <=> 空闲链为空 */
+        if ((s->state == SLUB_SLAB_FULL) != (s->freelist == NULL) ||
+            (s->state == SLUB_SLAB_EMPTY && s->inuse != 0)) {
+            snprintf(err, sizeof(err), "slab %lx state %u inconsistent",
+                     (unsigned long)s->base, (unsigned int)s->state);
+            slub_port_spin_unlock(&slub_index_lock, &f);
+            return err;
+        }
+        slab_inuse_sum += s->inuse;
+    }
+    slub_port_spin_unlock(&slub_index_lock, &f);
+
+    /* 2) 链表归属：partial 链成员必须 PARTIAL 且 inuse>0；empty 链成员
+     *    必须 EMPTY 且 inuse==0、空闲链非空 */
+    for (cls = 0; cls < SLUB_NCLASSES; cls++) {
+        struct slub_cache *c = &slub_caches[cls];
+        struct slub_slab *s;
+
+        slub_port_spin_lock(&c->lock, &f);
+        for (s = c->partial; s != NULL; s = s->next) {
+            if (s->state != SLUB_SLAB_PARTIAL || s->cls != cls ||
+                s->inuse == 0) {
+                snprintf(err, sizeof(err), "class %u partial slab bad state",
+                         cls);
+                slub_port_spin_unlock(&c->lock, &f);
+                return err;
+            }
+        }
+        for (s = c->empty; s != NULL; s = s->next) {
+            if (s->state != SLUB_SLAB_EMPTY || s->cls != cls || s->inuse != 0 ||
+                s->freelist == NULL) {
+                snprintf(err, sizeof(err), "class %u empty slab bad state",
+                         cls);
+                slub_port_spin_unlock(&c->lock, &f);
+                return err;
+            }
+        }
+        slub_port_spin_unlock(&c->lock, &f);
+    }
+
+    /* 3) 对象四态互斥（按计数交叉核对） */
+    {
+        size_t sheaf_sum = 0, barn_sum = 0, user_sum = 0;
+
+        for (cpu = 0; cpu < SLUB_NCPUS; cpu++) {
+            for (cls = 0; cls < SLUB_NCLASSES; cls++) {
+                sheaf_sum += slub_cc[cpu][cls].main.size;
+                sheaf_sum += slub_cc[cpu][cls].spare.size;
+                user_sum += slub_cs[cpu][cls].user;
+            }
+        }
+        for (cls = 0; cls < SLUB_NCLASSES; cls++) {
+            barn_sum += slub_barns[cls].size;
+        }
+        if (slab_inuse_sum != user_sum + sheaf_sum + barn_sum) {
+            snprintf(err, sizeof(err),
+                     "inuse %lu != user %lu + sheaf %lu + barn %lu",
+                     (unsigned long)slab_inuse_sum, (unsigned long)user_sum,
+                     (unsigned long)sheaf_sum, (unsigned long)barn_sum);
+            return err;
+        }
+    }
+
+    /* 4) 槽位标记查重（按 slab 建图，静态空间，不依赖 kmalloc）：
+     *    同一 slab 的同一槽位不得同时出现在“空闲链 + sheaf + barn”多个
+     *    仓库，sheaf/barn 内的对象也不得重复出现（计数核对抓不到“指针
+     *    被登记两次”）。静止态调用，锁无关。 */
+    {
+        static unsigned char mark[SLUB_MAX_SLAB_PAGES * SLUB_PAGE_SIZE /
+                                  SLUB_MIN_ALIGN];
+
+        slub_port_spin_lock(&slub_index_lock, &f);
+        for (i = 0; i < slub_index_nr; i++) {
+            struct slub_slab *s = slub_index[i];
+            struct slub_cache *c;
+            struct slub_slab *entry;
+            size_t nslots;
+            unsigned int cpu2, kk;
+
+            if (s->cls >= SLUB_NCLASSES) continue;
+            c = &slub_caches[s->cls];
+            nslots = (size_t)s->npages * SLUB_PAGE_SIZE / c->objsize;
+            if (nslots > sizeof(mark)) {
+                snprintf(err, sizeof(err), "slot map too small");
+                slub_port_spin_unlock(&slub_index_lock, &f);
+                return err;
+            }
+            memset(mark, 0, nslots);
+
+            /* 4a) 本 slab 空闲链上的槽位（重复/成环在这里被抓） */
+            for (entry = s->freelist; entry != NULL;
+                 entry = *(void **)entry) {
+                size_t slot = ((uintptr_t)entry - s->base) / c->objsize;
+                if (slot >= nslots) continue; /* 1) 已抓越界 */
+                if (mark[slot]) {
+                    snprintf(err, sizeof(err),
+                             "class %u slab %lx freelist slot %lu repeated",
+                             s->cls, (unsigned long)s->base,
+                             (unsigned long)slot);
+                    slub_port_spin_unlock(&slub_index_lock, &f);
+                    return err;
+                }
+                mark[slot] = 1; /* 1 = freelist */
+            }
+
+            /* 4b) sheaf/barn 中属于本 slab 的对象 */
+            for (cpu2 = 0; cpu2 < SLUB_NCPUS; cpu2++) {
+                struct slub_sheaf *sf[2];
+                sf[0] = &slub_cc[cpu2][s->cls].main;
+                sf[1] = &slub_cc[cpu2][s->cls].spare;
+                for (kk = 0; kk < 2; kk++) {
+                    unsigned int j;
+                    for (j = 0; j < sf[kk]->size; j++) {
+                        uintptr_t a = (uintptr_t)sf[kk]->objs[j];
+                        size_t slot;
+                        if (a < s->base ||
+                            a >= s->base + (uintptr_t)s->npages * SLUB_PAGE_SIZE)
+                            continue;
+                        slot = (a - s->base) / c->objsize;
+                        if (slot >= nslots || mark[slot]) {
+                            snprintf(err, sizeof(err),
+                                     "class %u slab %lx obj %lx in sheaf cpu%u "
+                                     "%s[%u] but slot %lu origin %u",
+                                     s->cls, (unsigned long)s->base,
+                                     (unsigned long)a, cpu2,
+                                     kk ? "spare" : "main", j,
+                                     (unsigned long)slot,
+                                     (unsigned int)mark[slot]);
+                            slub_port_spin_unlock(&slub_index_lock, &f);
+                            return err;
+                        }
+                        mark[slot] = 2; /* 2 = sheaf */
+                    }
+                }
+            }
+            for (kk = 0; kk < slub_barns[s->cls].size; kk++) {
+                uintptr_t a = (uintptr_t)slub_barns[s->cls].objs[kk];
+                size_t slot;
+                if (a < s->base ||
+                    a >= s->base + (uintptr_t)s->npages * SLUB_PAGE_SIZE)
+                    continue;
+                slot = (a - s->base) / c->objsize;
+                if (slot >= nslots || mark[slot]) {
+                    snprintf(err, sizeof(err),
+                             "class %u slab %lx obj %lx in barn[%u] but slot "
+                             "%lu origin %u",
+                             s->cls, (unsigned long)s->base, (unsigned long)a,
+                             kk, (unsigned long)slot,
+                             (unsigned int)mark[slot]);
+                    slub_port_spin_unlock(&slub_index_lock, &f);
+                    return err;
+                }
+                mark[slot] = 3; /* 3 = barn */
+            }
+        }
+        slub_port_spin_unlock(&slub_index_lock, &f);
+    }
+    return NULL;
+}
+#endif /* SLUB_DEBUG */
 
 /*
  * 校验 ptr 是否为“当前可释放”的对象，有问题直接 panic。
