@@ -228,10 +228,6 @@ spec 的重点是将“实现 Best-Fit”变成可以检查的条件。例如，
 
 ### 功能模块二任务二：Best-Fit
 
-#### 测试环境与方法
-
-测试日期为2026年10月26日。运行环境为 WSL2，实例名称为 Ubuntu-20.04，实例内实际系统版本为 Ubuntu 22.04.5 LTS；交叉编译器为 riscv64-unknown-elf-gcc 10.2.0，QEMU 为6.2.0，启动日志中的 OpenSBI 为0.9。
-
 在 WSL 终端进入项目的 code 目录，使用默认 Best-Fit 配置执行：
 
 ```bash
@@ -242,7 +238,7 @@ make grade 会自动清理旧构建、复制评分目录、注入测试、编译
 
 #### 实际测试结果
 
-官方评分流程的实测退出码为0，自动评分输出为：
+流程的实测退出码为0，自动评分输出为：
 
 ```text
 lab2 injection complete
@@ -252,6 +248,79 @@ Total Score: 20/20
 ```
 
 内核启动时先执行 basic_check() 和 best_fit_check()，检查分配、最小适配选择、拆分、释放合并和计数恢复；注入的 Test 1 检查页面初始化，Test 2 检查是否接入 Best-Fit。两项评分各10分，总分20/20，表明当前 Best-Fit 配置通过已有自检与评分检查。
+
+### 功能模块二任务三：Buddy System
+
+#### 测试覆盖与判定
+
+| 测试组 | 核心行为与边界 | 判定依据及能发现的问题 |
+| ------ | -------------- | ---------------------- |
+| 初始化与注册 | 注册起点偏移1页、长度13页的区域，并验证分批注册后合并 | 逐页申请确认完整覆盖，检查状态、对齐和计数，发现丢页、重复登记或合并遗漏 |
+| 基本分配释放 | 申请1、2、4、8页，检查连续、对齐、互不重叠，交错释放 | 释放后恢复基准计数，发现重复分配、错阶和回收不完整 |
+| 非二次幂请求 | 申请3页占4页、5页占8页，传原始请求释放 | 检查实际占用范围与计数变化，发现错误扣减、请求记录错误或取整尾页漏回收 |
+| 逐级拆分 | 从16页块申请1页，检查剩余1、2、4、8页块，并继续分配剩余全部页面 | 确认所有尾块仍可使用，发现拆分丢块、重复分配或链表登记错误 |
+| 伙伴合并 | 多级合并、不同释放顺序，以及相邻但不互为伙伴的块 | 释放真正伙伴后可重新申请大块；相邻非伙伴不能满足更高阶申请，发现误合并或漏合并 |
+| 分配失败 | 空池、总量不足、无合适阶及超大请求 | 要求返回 NULL，失败前后状态指纹不变，发现失败路径修改计数或破坏已有分配 |
+| 真实页数据隔离 | 申请1、3、5页，对实际1、4、8页写入不同标记并逐字节复查 | 覆盖取整尾部，发现物理页重叠、越界覆盖及实际数据损坏 |
+| 多轮操作与恢复 | 固定种子执行128步交错分配释放，逐步检查结构，结束后归还全部页面 | 核对计数、非重叠和块状态，并重新申请整个测试区，发现累积错误和资源泄漏 |
+
+结构检查同时核对各阶链表与 Page 描述符：块大小应与阶数一致、起点按物理页号对齐、页面状态一致，链表与描述符统计的空闲页数均应等于 nr_free。仅比较空闲页总数不足以排除重叠块或错误归属。
+
+#### 实际测试结果
+
+上述正向构建成功，运行日志包含：
+
+```text
+memory management: buddy_pmm_manager
+page_init: npage=557056 nbase=524288 freemem=8035d000 mem_end=88000000 nr_free=31907
+[Buddy 1] initialization and exact registration: PASS
+[Buddy 2] 1/2/4/8-page allocation and release: PASS
+[Buddy 3] rounded allocation and original-size free: PASS
+[Buddy 4] multi-level split and reuse of every tail: PASS
+[Buddy 5] true buddies, non-buddies and recursive merge: PASS
+[Buddy 6] allocation failures preserve all state: PASS
+[Buddy 8] 128 reproducible operations and full recovery: PASS
+[Buddy 7] real-page data isolation and rounded tails: PASS
+buddy_check: all 8 groups passed; live allocator restored
+check_alloc_page() succeeded!
+```
+
+八组检查完成后，真实分配器已恢复，并再次成功申请、释放1页。第8组先于第7组输出，是因为多轮描述符测试先执行，恢复真实状态后才运行真实页数据隔离测试。31907为该次构建的空闲页基线，随内核体积和编译配置变化，不作为固定通过条件。
+
+内核最后停留在 while(1)，QEMU由 timeout 结束，退出码为124；本次以八组断言检查完成、状态恢复及无非预期 panic 判定正向通过，不把124本身视为成功或失败。随后出现的 slub_smoke 输出属于 SLUB 冒烟测试，不混入 Buddy 八组结果。
+
+#### GDB观察验证
+
+另在独立副本中以 DEFS="-DPMM_USE_BUDDY -O0" 构建，使用 QEMU 的 -S 与 GDB 连接进行观察，不修改分配器状态，也不通过手动调用分配函数替代原测试。关键观察如下：
+
+| 观察位置与操作 | 实际观察结果 | 对应原理 |
+| -------------- | ------------ | -------- |
+| buddy_test_rounding()登记16页后，进入buddy_alloc_pages(3) | requested_order=2、length=4，找到order=4的16页块；拆分后保留4页块，另有4页和8页空闲块 | 请求向上取整并逐级拆分，剩余半块不丢失 |
+| 3页申请返回，随后完成5页申请 | 首次nr_free从16降为12，两个分配完成后剩4；分配首页property分别为3和5 | 保存原始请求，按实际4页和8页扣减 |
+| 依次执行free_pages对应的3页和5页释放 | nr_free依次恢复为8和16，最终pages[0].property=16 | 按原始请求释放整个实际块，并恢复大块 |
+| 合并测试释放页下标1和2后申请2页 | 两个空闲块property各为1、nr_free=2，申请返回NULL，计数仍为2 | 相邻非伙伴不能合并，总量足够不代表有合适阶块 |
+| 继续归还真正伙伴 | 观察到块大小依次恢复为2、4、8页 | 合并后以低地址首页为块首，逐阶寻找新伙伴 |
+
+上述小页下标属于独立描述符测试区域，不表示将固件或内核占用的真实物理页释放。调试构建关闭优化后内核体积不同，真实空闲页基线也可与普通构建不同。
+
+#### 非法操作验证
+
+独立负向运行记录覆盖重复释放、部分释放、错误原始请求、块内指针、零页申请、保留页和越界释放，共7个用例。每个编号分别构建、分别启动，以预期断言作为判定，未让预期 panic 中断正常测试后仍声称整套正常通过。例如重复释放用例的复现命令为：
+
+```bash
+make -B -j2 DEFS="-DPMM_USE_BUDDY -DBUDDY_NEGATIVE_TEST=1"
+timeout 3s qemu-system-riscv64 -machine virt -nographic -bios default -kernel bin/ucore.img
+```
+
+编号1～7依次对应上述七种误用。重复释放的实际记录为：
+
+```text
+[Buddy negative 1] EXPECT ASSERT
+kernel panic at kern/mm/buddy_pmm.c:185:
+    assertion failed: (base->flags & BUDDY_ALLOC_HEAD) && base->property == n
+```
+
+七个独立用例均触发预期断言；这些结果引用当日记录，不表述为本轮重新执行。Buddy 算法的判定依据为自身检查和行为测试，不要求它通过仅检查 Best-Fit 管理器身份的旧 Test 2，也未为此修改评分逻辑。
 
 ### Challenge：SLUB 内存对象分配器
 
