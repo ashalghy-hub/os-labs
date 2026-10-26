@@ -1,9 +1,13 @@
 #include <console.h>
 #include <defs.h>
 #include <pmm.h>
+#include <slub.h>
 #include <stdio.h>
 #include <string.h>
 #include <dtb.h>
+#ifdef SLUB_TEST
+#include <slub_test.h>
+#endif
 
 int kern_init(void) __attribute__((noreturn));
 void grade_backtrace(void);
@@ -37,7 +41,14 @@ int kern_init(void) {
     print_kerninfo();
 
     // grade_backtrace();
-    pmm_init();  // init physical memory management
+    pmm_init();   // init physical memory management
+    slub_init();  // init the SLUB object allocator (on top of the page
+                  // allocator; prints its own smoke result + fixed overhead)
+#ifdef SLUB_TEST
+    check_slub(); // SLUB 压力/回收/故障恢复测试；仅 -DSLUB_TEST 构建执行，
+                  // 输出 SLUB_TEST_PASS / SLUB_TEST_FAIL 供 tools/slub_test/
+                  // run_slub_test.sh 判定
+#endif
 
     /* do nothing */
     while (1)
