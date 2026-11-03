@@ -36,7 +36,13 @@ kern_entry:
     lui sp, %hi(bootstacktop)
 
     # 我们在虚拟内存空间中：随意跳转到虚拟地址！
-    # 跳转到 kern_init
+    # 1. 使用临时寄存器 t1 计算栈顶的精确地址
+    lui t1, %hi(bootstacktop)
+    addi t1, t1, %lo(bootstacktop)
+    # 2. 将精确地址一次性地、安全地传给 sp
+    mv sp, t1
+    # 现在栈指针已经完美设置，可以安全地调用任何C函数了
+    # 然后跳转到 kern_init (不再返回)
     lui t0, %hi(kern_init)
     addi t0, t0, %lo(kern_init)
     jr t0
@@ -50,25 +56,16 @@ bootstack:
     .global bootstacktop
 bootstacktop:
 
-.section .data
-    # 由于我们要把这个页表放到一个页里面，因此必须 12 位对齐
+    # a page table for Sv39
     .align PGSHIFT
     .global boot_page_table_sv39
 # 分配 4KiB 内存给预设的三级页表
 boot_page_table_sv39:
     # 0xffffffff_c0000000 map to 0x80000000 (1G)
-    # /* SKELETON FIX: original table only mapped the high half (index 511).
-    #  * After `csrw satp`, the CPU keeps fetching at the low PC
-    #  * (0x80200038...), which then has no mapping -> exec page fault
-    #  * before kern_init ever runs, so grading tests are unreachable.
-    #  * Add the identity mapping at index 2 (VA 0x80000000 -> PA 0x80000000,
-    #  * 1G page) so the trampoline between satp and the jump to the
-    #  * high-half `kern_init` stays executable. */
-    .zero 8 * 2
-    .quad (0x80000 << 10) | 0xcf # VPN2=2: identity map 0x80000000 -> 0x80000000 (1G, VRWXAD)
-    .zero 8 * (511 - 3)
+    # 前 511 个页表项均设置为 0 ，因此 V=0 ，意味着是空的(unmapped)
+    .zero 8 * 511
     # 设置最后一个页表项，PPN=0x80000，标志位 VRWXAD 均为 1
-    .quad (0x80000 << 10) | 0xcf # VPN2=511: 0xffffffffc0000000 -> 0x80000000 (1G, VRWXAD)
+    .quad (0x80000 << 10) | 0xcf # VRWXAD
 
     .global boot_hartid
 boot_hartid:
