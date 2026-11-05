@@ -270,7 +270,7 @@ make grade
 
 **Test 2** 执行自定义非法指令 `.word 0x0000007b`（32 位），验证 epc 推进 4 字节后程序继续执行。随后由测试直接构造软件中断（IRQ_S_SOFT）、未知中断（cause 15）和未知异常（cause 20），验证类型提示与 `print_trapframe()` 兜底输出；输出需包含 "Illegal instruction at"、"Supervisor software interrupt"、"Unknown interrupt: cause 15" 和 "cause    0x00000014"。
 
-**Test 3** 使能时钟中断后自旋等待 ticks 达到 200，验证每次 IRQ_S_TIMER 都正确调用 `clock_set_next_event()` 重设事件、递增 ticks，且多次 Trap 返回后上下文不退化。timebase 为 100000 个时钟周期（QEMU virt 平台 10MHz），中断间隔约 10ms，200 次约 2 秒；输出需包含 "100 ticks" 与 "ticks=200"，不以第一次打印成功代替持续正确。
+**Test 3** 使能时钟中断后自旋等待 ticks 达到 200，验证每次 IRQ_S_TIMER 都正确调用 `clock_set_next_event()` 重设事件、递增 ticks，且多次 Trap 返回后上下文不退化。timebase 为 100000 个平台时间计数单位，`rdtime` 读取平台时间计数而非 CPU 周期；在 QEMU virt 平台时间计数频率为 10MHz 时，中断间隔约 10ms，200 次约 2 秒；输出需包含 "100 ticks" 与 "ticks=200"，不以第一次打印成功代替持续正确。
 
 ### 实际测试结果
 
