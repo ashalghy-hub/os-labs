@@ -238,35 +238,6 @@ void exception_handler(struct trapframe *tf);
 
 ---
 
-### 练习：理解 Trap frame 中 sp 的保存与恢复
-
-**负责人：** 2413625-张龙飞、2412303-袁煜杰
-
-**问题：** 为什么 RESTORE_ALL 不能像其他通用寄存器一样直接恢复 x2(sp)？
-
-**解答：** SAVE_ALL 执行 `csrw sscratch, sp` 保存原始 sp，然后 `addi sp, sp, -288` 在栈上分配 Trap frame 空间。此后 sp 指向 Trap frame 首地址，原 sp 被保存在 sscratch 中，随后存入 Trap frame 槽位 2。恢复时，RESTORE_ALL 以 sp 为基址逐个 LOAD Trap frame 中的寄存器值。如果在恢复其他寄存器之前就恢复 x2(sp)，sp 会指向被中断程序的栈空间，后续所有 LOAD 将无法正确读取 Trap frame 的剩余数据。因此必须最后恢复 sp。
-
-更具体地说，RESTORE_ALL 的执行序列是：
-
-1. `LOAD t0, 32*REGBYTES(sp)` + `csrw sstatus, t0` — 用 t0 作临时寄存器恢复 sstatus
-2. `LOAD t0, 33*REGBYTES(sp)` + `csrw sepc, t0` — 用 t0 作临时寄存器恢复 sepc
-3. `LOAD x1, 1*REGBYTES(sp)` 到 `LOAD x31, 31*REGBYTES(sp)` — 恢复 x1、x3–x31
-4. `LOAD x2, 2*REGBYTES(sp)` — 最后恢复 sp
-
-t0 可以先用作临时寄存器是因为它的原始值保存在 Trap frame 槽位 5 中，步骤 3 中会恢复。
-
----
-
-### 练习：理解 sret 的语义
-
-**负责人：** 2413625-张龙飞
-
-**问题：** sret 执行后 sstatus 是否与保存值完全相同？
-
-**解答：** 不是。sret 按 RISC-V 特权规范更新 sstatus 的若干字段：SPIE 复制到 SIE（中断使能），SPIE 置 1，SPP 清为 U。因此 sret 执行后的 sstatus 与 RESTORE_ALL 写入的 sstatus 不会逐位相同。RESTORE_ALL 写入的是 trap 发生前保存的 sstatus（或 trap() 修改后的值），sret 基于该值计算返回后的最终状态；本实验全部 Trap 来自 S 模式，sret 之后 SPP 被清零这一点尤其需要注意，不能把“恢复的 sstatus”等同于“sret 后的 sstatus”。
-
----
-
 ### Challenge：无
 
 本次 Lab3 未设置独立 Challenge 任务。
