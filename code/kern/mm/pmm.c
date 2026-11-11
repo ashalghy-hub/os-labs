@@ -321,10 +321,91 @@ struct Page *get_page(pde_t *pgdir, uintptr_t la, pte_t **ptep_store)
     return NULL;
 }
 
-//LAB4 function1 YOUR CODE
+//LAB4 function1 2413357
+// page_insert - map the physical page 'page' at the linear address 'la'
+//              in the page directory 'pgdir' with the permission 'perm'.
+//              an already existing mapping of 'la' is replaced, the
+//              permission of a mapping of the same physical page is only
+//              refreshed.
+// parameter:
+//  pgdir:  the kernel virtual base address of PDT
+//  page:   the physical page to be mapped
+//  la:     the linear address need to map
+//  perm:   the permission bits (PTE_U/PTE_W/PTE_R ...) of the new mapping
+// return value: 0 on success, -E_NO_MEM if the page table cannot be created
+int page_insert(pde_t *pgdir, struct Page *page, uintptr_t la, uint32_t perm)
+{
+    // create the intermediate page tables if they do not exist yet
+    pte_t *ptep = get_pte(pgdir, la, 1);
+    if (ptep == NULL)
+    {
+        // no memory for the page table, the old mapping and the reference
+        // counts of the physical pages are left untouched
+        return -E_NO_MEM;
+    }
 
+    // take a reference on the new page first, so that it can never be
+    // released while the old mapping is being revoked
+    page_ref_inc(page);
 
+    if (*ptep & PTE_V)
+    {
+        struct Page *old_page = pte2page(*ptep);
+        if (old_page == page)
+        {
+            // the same page is already mapped here: cancel the reference
+            // taken above, the reference count of the page stays unchanged
+            page_ref_dec(page);
+        }
+        else
+        {
+            // revoke the old mapping: drop one reference of the old page and
+            // release it only if nobody else is using it
+            if (page_ref_dec(old_page) == 0)
+            {
+                free_page(old_page);
+            }
+        }
+    }
 
+    // install the new mapping, the permission bits of the old mapping are
+    // not kept
+    *ptep = pte_create(page2ppn(page), perm | PTE_V);
+    // the stale TLB entry of 'la' has to be dropped
+    tlb_invalidate(pgdir, la);
+    return 0;
+}
+
+// page_remove - revoke the mapping of the linear address 'la' in the page
+//               directory 'pgdir'. the physical page is released only when
+//               the last reference of it is gone, removing an address which
+//               is not mapped does nothing.
+// parameter:
+//  pgdir:  the kernel virtual base address of PDT
+//  la:     the linear address need to be unmapped
+void page_remove(pde_t *pgdir, uintptr_t la)
+{
+    // never create a page table here, an unmapped address is simply ignored
+    pte_t *ptep = get_pte(pgdir, la, 0);
+    if (ptep == NULL || !(*ptep & PTE_V))
+    {
+        return;
+    }
+
+    struct Page *page = pte2page(*ptep);
+
+    // drop the mapping and the stale TLB entry before the physical page is
+    // handed back to the physical memory manager
+    *ptep = 0;
+    tlb_invalidate(pgdir, la);
+
+    // the page is released only when the last reference is gone, a page
+    // shared by several mappings is kept
+    if (page_ref_dec(page) == 0)
+    {
+        free_page(page);
+    }
+}
 
 
 
