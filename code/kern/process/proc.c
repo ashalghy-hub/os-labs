@@ -218,7 +218,146 @@ init_main(void *arg)
     return 0;
 }
 
-//LAB4 function2 YOUR CODE
+//LAB4 function2 2413625
+
+static struct proc_struct *
+alloc_proc(void)
+{
+    struct proc_struct *proc = kmalloc(sizeof(struct proc_struct));
+    if (proc == NULL)
+    {
+        return NULL;
+    }
+
+    // Clear the initial context and leave both list nodes detached.
+    memset(proc, 0, sizeof(*proc));
+    proc->state = PROC_UNINIT;
+    proc->pid = -1;
+    proc->pgdir = boot_pgdir_pa;
+    list_init(&proc->list_link);
+    list_init(&proc->hash_link);
+    return proc;
+}
+
+int
+kernel_thread(int (*fn)(void *), void *arg, uint32_t clone_flags)
+{
+    struct trapframe tf;
+    memset(&tf, 0, sizeof(tf));
+    tf.gpr.s0 = (uintptr_t)fn;
+    tf.gpr.s1 = (uintptr_t)arg;
+    tf.epc = (uintptr_t)kernel_thread_entry;
+    // Keep interrupts disabled during restore; sret enables them at entry.
+    tf.status = (read_csr(sstatus) | SSTATUS_SPP | SSTATUS_SPIE) & ~SSTATUS_SIE;
+    return do_fork(clone_flags | CLONE_VM, 0, &tf);
+}
+
+void
+proc_init(void)
+{
+    // set_proc_name reads PROC_NAME_LEN bytes, including the padding.
+    const char idle_name[PROC_NAME_LEN] = "idle";
+    const char init_name[PROC_NAME_LEN] = "init";
+
+    list_init(&proc_list);
+    for (int bucket = 0; bucket < HASH_LIST_SIZE; bucket++)
+    {
+        list_init(&hash_list[bucket]);
+    }
+
+    idleproc = alloc_proc();
+    if (idleproc == NULL)
+    {
+        panic("cannot allocate idleproc.\n");
+    }
+    // The idle thread continues on the boot stack without list registration.
+    idleproc->pid = 0;
+    idleproc->state = PROC_RUNNABLE;
+    idleproc->kstack = (uintptr_t)bootstack;
+    idleproc->need_resched = 1;
+    set_proc_name(idleproc, idle_name);
+    nr_process++;
+    current = idleproc;
+
+    int pid = kernel_thread(init_main, "Hello world!!", 0);
+    if (pid <= 0)
+    {
+        panic("cannot create initproc: %d.\n", pid);
+    }
+    initproc = find_proc(pid);
+    assert(initproc != NULL);
+    set_proc_name(initproc, init_name);
+    assert(idleproc->pid == 0 && initproc->pid == 1);
+}
+
+static int
+copy_mm(uint32_t clone_flags, struct proc_struct *proc)
+{
+    // Lab4 creates only kernel threads, which have no user address space.
+    (void)clone_flags;
+    (void)proc;
+    return 0;
+}
+
+static void
+copy_thread(struct proc_struct *proc, uintptr_t esp, struct trapframe *tf)
+{
+    proc->tf = (struct trapframe *)(proc->kstack + KSTACKSIZE) - 1;
+    *proc->tf = *tf;
+    proc->tf->gpr.a0 = 0;
+    proc->tf->gpr.sp = esp != 0 ? esp : (uintptr_t)proc->tf;
+
+    // The first switch enters forkret, which restores this trapframe.
+    proc->context.ra = (uintptr_t)forkret;
+    proc->context.sp = (uintptr_t)proc->tf;
+}
+
+int
+do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf)
+{
+    if (nr_process >= MAX_PROCESS)
+    {
+        return -E_NO_FREE_PROC;
+    }
+
+    struct proc_struct *proc = alloc_proc();
+    if (proc == NULL)
+    {
+        return -E_NO_MEM;
+    }
+    proc->parent = current;
+
+    int ret = setup_kstack(proc);
+    if (ret != 0)
+    {
+        goto free_proc;
+    }
+    ret = copy_mm(clone_flags, proc);
+    if (ret != 0)
+    {
+        goto free_stack;
+    }
+    copy_thread(proc, stack, tf);
+
+    // Publish the PID, both list links, and the count as one update.
+    bool intr_flag;
+    local_intr_save(intr_flag);
+    proc->pid = get_pid();
+    hash_proc(proc);
+    list_add(&proc_list, &proc->list_link);
+    nr_process++;
+    local_intr_restore(intr_flag);
+
+    wakeup_proc(proc);
+    return proc->pid;
+
+    // Release only the resources acquired before the failure.
+free_stack:
+    put_kstack(proc);
+free_proc:
+    kfree(proc);
+    return ret;
+}
 
 
 //LAB4 function3 YOUR CODE
