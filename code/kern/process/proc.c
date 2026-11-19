@@ -360,4 +360,36 @@ free_proc:
 }
 
 
-//LAB4 function3 YOUR CODE
+//LAB4 function3 2412303
+// proc_run - make process "proc" running on cpu
+// NOTE: before call switch_to, should load base addr of "proc"'s new PDT
+void
+proc_run(struct proc_struct *proc)
+{
+    if (proc != current)
+    {
+        bool intr_flag;
+        struct proc_struct *prev = current, *next = proc;
+        local_intr_save(intr_flag);
+        {
+            current = proc;
+            write_csr(satp, ((uintptr_t)SATP_MODE_SV39 << 60) | (next->pgdir >> RISCV_PGSHIFT));
+            flush_tlb();
+            switch_to(&(prev->context), &(next->context));
+        }
+        local_intr_restore(intr_flag);
+    }
+}
+
+// cpu_idle - at the end of kern_init, the first kernel thread idleproc will do below works
+void
+cpu_idle(void)
+{
+    while (1)
+    {
+        if (current->need_resched)
+        {
+            schedule();
+        }
+    }
+}
