@@ -7,7 +7,7 @@
 | **实验名称** | Lab 4：进程管理                                |
 | **小组成员** | 2412303-袁煜杰、2413625-张龙飞、2413357-王逸凌 |
 | **报告日期** | 2026-11-21                                     |
-| **代码版本** | `lab4` 分支，实验实现截至 `c1790b6`        |
+| **代码版本** | `lab4` 分支（基于 `c1790b6` 并包含 GCC 14 / QEMU 10.2.1 / WSL 兼容修复） |
 
 ### 小组分工
 
@@ -43,9 +43,7 @@
 - **AI 编程工具**：指使用的终端工具、编辑器插件、桌面应用或浏览器界面。
 - **底层模型**：指工具使用的模型及版本。上表为此前登记的配置，Lab4 各模块使用的具体版本未另行记录。
 
-**测试环境：** WSL Ubuntu 22.04.5 LTS、`riscv64-unknown-elf-gcc` 10.2.0、QEMU 6.2.0、OpenSBI v0.9，RISC-V `virt` 单 hart。
-
-实验要求见 [Lab4 实验指导书](lab4实验指导书.md)。实现原码汇总、寄存器走读及答辩演示见 [Lab4 答辩文档](lab4答辩文档.md)。
+**测试环境：** WSL Ubuntu 26.04.1 LTS、`riscv64-unknown-elf-gcc` 14.2.0、QEMU 10.2.1、OpenSBI v1.8、`gdb-multiarch`（GNU gdb 17.1），RISC-V `virt` 单 hart。
 
 ---
 
@@ -164,10 +162,10 @@ OpenSBI → kern_entry（启动页表、启动栈）→ kern_init
 
 ### Makefile 评分流程
 
-本次以课程 [Makefile 的 `grade` 目标](../code/Makefile) 为主要验证入口，在 `code/` 目录执行 `make grade`。需要使用另一个 RISC-V GDB 时，可以通过 `make grade GDB=<调试器路径>` 指定；该参数不改变用例及计分规则。
+本次以课程 [Makefile 的 `grade` 目标](../code/Makefile) 为主要验证入口，在 `code/` 目录执行 `make grade`。`Makefile` 会优先选用 `$(GCCPREFIX)gdb`，若未安装则自动回退到 `gdb-multiarch`；如需指定其他 RISC-V GDB，仍可通过 `make grade GDB=<调试器路径>` 覆盖（不改变用例及计分规则）。
 
-1. `make grade` 清理旧构建，将源码复制到临时评分目录，然后运行 [inject.py](../code/tools/inject.py)。注入只修改临时副本：把课程测试加入构建，并分别在 `pmm_init()` 末尾、`proc_init()` 末尾和 `init_main()` 开头插入测试调用。
-2. [grade.sh](../code/tools/grade.sh) 在副本中编译并启动 QEMU，启动参数为 `-kernel bin/ucore.img`，串口输出写入评分日志。脚本用 GDB 运行到调试监控的 `readline` 断点后，再检查串口记录。
+1. `make grade` 清理旧构建，将源码复制到临时评分目录，运行 [inject.py](../code/tools/inject.py) 注入课程测试（把测试加入构建，并分别在 `pmm_init()` 末尾、`proc_init()` 末尾和 `init_main()` 开头插入测试调用），并在临时副本中自动规范化 `tools/grade.sh` 的行尾换行符。
+2. [grade.sh](../code/tools/grade.sh) 在副本中编译并启动 QEMU，启动参数为 `-kernel bin/ucore.img`，串口输出写入评分日志。脚本先设置 `set arch riscv:rv64`，再用 GDB 运行到调试监控的 `readline` 断点后检查串口记录。
 3. 三项检查共享同一次启动的日志。每项必须匹配该项规定的输出才计分；调度项除 `PASS` 标记外，还要匹配 init 的 PID、名称和两行消息。
 
 ### 课程评分测试用例
@@ -187,16 +185,16 @@ OpenSBI → kern_entry（启动页表、启动栈）→ kern_init
 
 ### 实际评分结果
 
-`make grade` 实测退出码为 0，评分器输出：
+在完成上述环境兼容修复（`pmm.c` 中 `get_pte()` 非叶子页表项移除保留位 `PTE_U` 并调整 `check_pgdir()` 对应断言、`kmalloc.c` 与 `test_lab4.c` 修正 GCC 14 类型检查、`Makefile`/`grade.sh` 兼容 LF 行尾与 `gdb-multiarch`）后，在当前 WSL 环境实测 `make grade` 退出码为 0，评分器输出：
 
 ```text
-check PMM:             OK
-check Process Create:  OK
-check Schedule:        OK
+  -check PMM:                                OK
+  -check Process Create:                     OK
+  -check Schedule:                           OK
 Total Score: 30/30
 ```
 
-串口中的三个 `[Test …] PASS` 都来自课设测试的断言。调度项另外匹配了以下三行：
+注入的三个测试用例均打印了 `[Test PMM] PASS`、`[Test Process Create] PASS` 和 `[Test Schedule] PASS`，调度项另外匹配了以下三行：
 
 ```text
 this initproc, pid = 1, name = "init"
@@ -206,7 +204,7 @@ To U: "en.., Bye, Bye. :)"
 
 ### 启动自检与结果边界
 
-普通 `make qemu` 仅作补充检查：`check_pgdir()` 和 `check_boot_pgdir()` 成功，分别验证表项和引用数、实际访问两个地址指向的同一物理页；随后内核进入 init 并打印消息。普通启动没有注入评分用例，三项得分以 `make grade` 为准。
+在当前 WSL + QEMU 10.2.1 + OpenSBI v1.8 环境下实测 `make -j` 编译零报错，`make qemu` 补充检查正常通过：`check_alloc_page()`、`check_pgdir()` 和 `check_boot_pgdir()` 成功，`kmalloc_init()`、`check_vma_struct()` 与 `check_vmm()` 通过，随后内核切入 `initproc` 并打印上述三行消息。普通启动没有注入评分用例，三项得分以 `make grade` 为准。
 
 三项通过后，`init_main()` 返回，框架已有的 `do_exit()` 占位打印 `process exit!!.` 并进入内核调试监控。这发生在各项断言和 init 输出之后。评分未覆盖资源分配失败注入、触及进程上限、多 hart 或时间片抢占，这些不计入本次实测结论。
 

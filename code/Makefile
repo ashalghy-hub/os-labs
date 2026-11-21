@@ -27,7 +27,7 @@ endif
 HOSTCC		:= gcc
 HOSTCFLAGS	:= -Wall -O2
 
-GDB		:= $(GCCPREFIX)gdb
+GDB		:= $(shell if command -v $(GCCPREFIX)gdb >/dev/null 2>&1; then echo $(GCCPREFIX)gdb; else echo gdb-multiarch; fi)
 
 CC		:= $(GCCPREFIX)gcc
 CFLAGS  := -mcmodel=medany -O2 -std=gnu99 -Wno-unused
@@ -184,7 +184,7 @@ debug: $(UCOREIMG) $(SWAPIMG) $(SFSIMG)
 		-s -S
 
 gdb:
-	riscv64-unknown-elf-gdb \
+	$(GDB) \
     -ex 'file bin/kernel' \
     -ex 'set arch riscv:rv64' \
     -ex 'target remote localhost:1234'
@@ -210,6 +210,7 @@ grade:
 	$(V)$(MKDIR) $(GRADE_TMP)
 	$(V)tar -C . --exclude=.git --exclude=.vscode --exclude=vcs -cf - . | tar -C $(GRADE_TMP) -xf -
 	$(V)python3 tools/inject.py $(GRADE_TMP)
+	$(V)sed -i 's/\r$$//' $(GRADE_TMP)/tools/grade.sh
 	$(V)cd $(GRADE_TMP) && $(SH) tools/grade.sh
 	$(V)$(RM) -rf $(GRADE_TMP)
 
